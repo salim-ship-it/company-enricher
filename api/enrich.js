@@ -10,89 +10,84 @@ export default async function handler(req, res) {
     const { company } = req.body;
     if (!company) return res.status(400).json({ error: 'Company name required' });
 
-    const messages = [{
-      role: 'user',
-      content: `Search for the company "${company}" and find:
-1. Their LinkedIn company URL (https://www.linkedin.com/company/...)
-2. Their official website domain
+    let domain = null;
+    let linkedinUrl = null;
+    let companyName = company;
+    let confidence = 'low';
 
-After searching, return ONLY this JSON with no markdown:
-{"linkedin_url": "...", "domain": "...", "company_name": "${company}", "confidence": "high|medium|low"}`
-    }];
-
-    // Agentic loop - handle tool use
-    let finalText = '';
-    let iterations = 0;
-
-    while (iterations < 5) {
-      iterations++;
-
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'anthropic-dangerous-direct-browser-access': 'true',
-        },
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-5',
-          max_tokens: 1000,
-          tools: [{ type: 'web_search_20250305', name: 'web_search' }],
-          messages
-        })
-      });
-
-      const data = await response.json();
-      const stopReason = data.stop_reason;
-      const content = data.content || [];
-
-      // Add assistant response to messages
-      messages.push({ role: 'assistant', content });
-
-      if (stopReason === 'end_turn') {
-        // Extract final text
-        for (const block of content) {
-          if (block.type === 'text') finalText = block.text;
-        }
-        break;
-      }
-
-      if (stopReason === 'tool_use') {
-        // Build tool results
-        const toolResults = [];
-        for (const block of content) {
-          if (block.type === 'tool_use') {
-            toolResults.push({
-              type: 'tool_result',
-              tool_use_id: block.id,
-              content: block.input?.query
-                ? `Search completed for: ${block.input.query}`
-                : 'Search completed'
-            });
-          }
-        }
-        messages.push({ role: 'user', content: toolResults });
-        continue;
-      }
-
-      break;
-    }
-
-    // Parse result
-    let result;
+    // Step 1: Clearbit autocomplete — free, no auth, best for known companies
     try {
-      const clean = finalText.replace(/```json|```/g, '').trim();
-      const match = clean.match(/\{[\s\S]*\}/);
-      result = JSON.parse(match ? match[0] : clean);
-    } catch {
-      result = {
-        company_name: company,
-        linkedin_url: null,
-        domain: null,
-        confidence: 'low'
-      };
+      const cbRes = await fetch(
+        `https://autocomplete.clearbit.com/v1/companies/suggest?query=${encodeURIComponent(company)}`,
+        { headers: { 'User-Agent': 'Mozilla/5.0' } }
+      );
+      const cbData = await cbRes.json();
+      if (cbData && cbData.length > 0) {
+        const best = cbData[0];
+        if (best.domain) domain = `https://${best.domain}`;
+        companyName = best.name || company;
+        confidence = 'medium';
+      }
+    } catch (e) {}
+
+    // Step 2: DuckDuckGo HTML search for LinkedIn
+    try {
+      const q = encodeURIComponent(`${company} linkedin company page`);
+      const ddgRes = await fetch(`https://html.duckduckgo.com/html/?q=${q}`, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept-Language': 'en-US,en;q=0.9',
+          'Accept': 'text/html'
+        }
+      });
+      const html = await ddgRes.text();
+      const matches = [...html.matchAll(/linkedin\.com\/company\/([a-zA-Z0-9\-_]+)/g)];
+      const skip = new Set(['login','signup','company','jobs','in','pub','search','about','help','legal','accessibility']);
+      const slugs = [...new Set(matches.map(m => m[1]))].filter(s => s.length > 2 && !skip.has(s.toLowerCase()));
+      if (slugs.length > 0) {
+        linkedinUrl = `https://www.linkedin.com/company/${slugs[0]}`;
+        confidence = domain ? 'high' : 'medium';
+      }
+    } catch (e) {}
+
+    // Step 3: If still no domain, try to find from DuckDuckGo website search
+    if (!domain) {
+      try {
+        const q = encodeURIComponent(`${company} official website UAE`);
+        const ddgRes = await fetch(`https://html.duckduckgo.com/html/?q=${q}`, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'text/html'
+          }
+        });
+        const html = await ddgRes.text();
+        // Extract result URLs from DDG result links
+        const urlMatches = [...html.matchAll(/uddg=([^"&]+)/g)];
+        const skip = ['duckduckgo', 'google', 'linkedin', 'facebook', 'instagram', 'twitter', 'youtube', 'bayt', 'indeed', 'glassdoor', 'naukrigulf'];
+        for (const m of urlMatches) {
+          try {
+            const decoded = decodeURIComponent(m[1]);
+            const url = new URL(decoded);
+            const host = url.hostname.replace('www.', '');
+            if (!skip.some(s => host.includes(s))) {
+              domain = `https://${url.hostname}`;
+              confidence = linkedinUrl ? 'high' : 'medium';
+              break;
+            }
+          } catch {}
+        }
+      } catch (e) {}
     }
 
-    return res.status(200).json({ success: true, ...result });
+    return res.status(200).json({
+      success: true,
+      company_name: companyName,
+      linkedin_url: linkedinUrl,
+      domain,
+      confidence,
+      search_linkedin: `https://www.linkedin.com/search/results/companies/?keywords=${encodeURIComponent(company)}`,
+      search_google: `https://www.google.com/search?q=${encodeURIComponent(company + ' linkedin company page UAE')}`
+    });
 
   } catch (err) {
     return res.status(500).json({ success: false, error: err.message });
