@@ -22,34 +22,49 @@ export default async function handler(req) {
       },
       body: JSON.stringify({
         model: 'claude-sonnet-4-5',
-        max_tokens: 500,
+        max_tokens: 1000,
+        tools: [
+          {
+            type: 'web_search_20250305',
+            name: 'web_search'
+          }
+        ],
         messages: [{
           role: 'user',
-          content: `You are a company data expert. For the company "${company}", find and return:
-1. Their LinkedIn company page URL (format: https://www.linkedin.com/company/[slug])
-2. Their official website domain (format: https://www.example.com)
+          content: `Search the web for the company "${company}" and find:
+1. Their exact LinkedIn company page URL (https://www.linkedin.com/company/...)
+2. Their official website domain
 
-Rules:
-- Return ONLY valid JSON, no markdown, no explanation
-- If you are not confident about a field, return null for that field
-- LinkedIn URL must follow the exact format: https://www.linkedin.com/company/[slug]
-- Domain should be the main official website
-- Do not guess or make up URLs — only return what you are confident about
+Search for: "${company} LinkedIn" and "${company} official website"
 
-Return exactly this JSON:
-{"linkedin_url": "https://www.linkedin.com/company/...", "domain": "https://www.example.com", "company_name": "${company}", "confidence": "high|medium|low"}`
+After searching, return ONLY valid JSON with no markdown:
+{"linkedin_url": "...", "domain": "...", "company_name": "${company}", "confidence": "high|medium|low"}
+
+If you cannot find a field with confidence, use null.`
         }],
       }),
     });
 
     const data = await res.json();
-    const raw = data.content?.[0]?.text || '{}';
+
+    // Extract text from the final response (after tool use)
+    let rawText = '';
+    for (const block of (data.content || [])) {
+      if (block.type === 'text') rawText = block.text;
+    }
 
     let result;
     try {
-      result = JSON.parse(raw.replace(/```json|```/g, '').trim());
+      result = JSON.parse(rawText.replace(/```json|```/g, '').trim());
     } catch {
-      result = { error: 'Could not parse result', raw };
+      // Try to extract JSON from the text
+      const match = rawText.match(/\{[\s\S]*\}/);
+      if (match) {
+        try { result = JSON.parse(match[0]); }
+        catch { result = { error: 'Parse failed', raw: rawText.slice(0, 200) }; }
+      } else {
+        result = { error: 'No result found', raw: rawText.slice(0, 200) };
+      }
     }
 
     return new Response(JSON.stringify({ success: true, ...result }), {
