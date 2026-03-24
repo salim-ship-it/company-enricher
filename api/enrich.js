@@ -1,20 +1,16 @@
-export const config = { runtime: 'edge' };
+export default async function handler(req, res) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-export default async function handler(req) {
-  const cors = {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
-  };
-
-  if (req.method === 'OPTIONS') return new Response(null, { headers: cors });
-  if (req.method !== 'POST') return new Response(JSON.stringify({ error: 'Method not allowed' }), { status: 405, headers: { ...cors, 'Content-Type': 'application/json' } });
+  if (req.method === 'OPTIONS') return res.status(200).end();
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   try {
-    const { company } = await req.json();
-    if (!company) return new Response(JSON.stringify({ error: 'Company name required' }), { status: 400, headers: { ...cors, 'Content-Type': 'application/json' } });
+    const { company } = req.body;
+    if (!company) return res.status(400).json({ error: 'Company name required' });
 
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -23,31 +19,24 @@ export default async function handler(req) {
       body: JSON.stringify({
         model: 'claude-sonnet-4-5',
         max_tokens: 1000,
-        tools: [
-          {
-            type: 'web_search_20250305',
-            name: 'web_search'
-          }
-        ],
+        tools: [{ type: 'web_search_20250305', name: 'web_search' }],
         messages: [{
           role: 'user',
-          content: `Search the web for the company "${company}" and find:
-1. Their exact LinkedIn company page URL (https://www.linkedin.com/company/...)
-2. Their official website domain
+          content: `Find the LinkedIn company page URL and official website for: "${company}"
 
-Search for: "${company} LinkedIn" and "${company} official website"
+Search for "${company} LinkedIn company" and "${company} official website"
 
-After searching, return ONLY valid JSON with no markdown:
-{"linkedin_url": "...", "domain": "...", "company_name": "${company}", "confidence": "high|medium|low"}
+Return ONLY this JSON, no markdown, no extra text:
+{"linkedin_url": "https://www.linkedin.com/company/...", "domain": "https://www.example.com", "company_name": "${company}", "confidence": "high"}
 
-If you cannot find a field with confidence, use null.`
-        }],
-      }),
+Use null for any field you cannot find with confidence.`
+        }]
+      })
     });
 
-    const data = await res.json();
+    const data = await response.json();
 
-    // Extract text from the final response (after tool use)
+    // Find the last text block (after tool use completes)
     let rawText = '';
     for (const block of (data.content || [])) {
       if (block.type === 'text') rawText = block.text;
@@ -55,26 +44,16 @@ If you cannot find a field with confidence, use null.`
 
     let result;
     try {
-      result = JSON.parse(rawText.replace(/```json|```/g, '').trim());
+      const clean = rawText.replace(/```json|```/g, '').trim();
+      const match = clean.match(/\{[\s\S]*\}/);
+      result = JSON.parse(match ? match[0] : clean);
     } catch {
-      // Try to extract JSON from the text
-      const match = rawText.match(/\{[\s\S]*\}/);
-      if (match) {
-        try { result = JSON.parse(match[0]); }
-        catch { result = { error: 'Parse failed', raw: rawText.slice(0, 200) }; }
-      } else {
-        result = { error: 'No result found', raw: rawText.slice(0, 200) };
-      }
+      result = { company_name: company, linkedin_url: null, domain: null, confidence: 'low', error: 'parse_failed' };
     }
 
-    return new Response(JSON.stringify({ success: true, ...result }), {
-      headers: { ...cors, 'Content-Type': 'application/json' },
-    });
+    return res.status(200).json({ success: true, ...result });
 
   } catch (err) {
-    return new Response(JSON.stringify({ success: false, error: err.message }), {
-      status: 500,
-      headers: { ...cors, 'Content-Type': 'application/json' },
-    });
+    return res.status(500).json({ success: false, error: err.message });
   }
 }
