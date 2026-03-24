@@ -2,7 +2,6 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
@@ -10,74 +9,79 @@ export default async function handler(req, res) {
     const { company } = req.body;
     if (!company) return res.status(400).json({ error: 'Company name required' });
 
+    // ── Step 1: Clearbit → domain ──────────────────────────────────────
     let domain = null;
-    let linkedinUrl = null;
     let companyName = company;
-    let confidence = 'low';
-
-    // Step 1: Clearbit autocomplete — free, no auth, best for known companies
     try {
-      const cbRes = await fetch(
+      const cb = await fetch(
         `https://autocomplete.clearbit.com/v1/companies/suggest?query=${encodeURIComponent(company)}`,
         { headers: { 'User-Agent': 'Mozilla/5.0' } }
       );
-      const cbData = await cbRes.json();
-      if (cbData && cbData.length > 0) {
-        const best = cbData[0];
-        if (best.domain) domain = `https://${best.domain}`;
-        companyName = best.name || company;
-        confidence = 'medium';
+      const cbData = await cb.json();
+      if (cbData?.length > 0 && cbData[0].domain) {
+        domain = `https://${cbData[0].domain}`;
+        companyName = cbData[0].name || company;
       }
-    } catch (e) {}
+    } catch {}
 
-    // Step 2: DuckDuckGo HTML search for LinkedIn
-    try {
-      const q = encodeURIComponent(`${company} linkedin company page`);
-      const ddgRes = await fetch(`https://html.duckduckgo.com/html/?q=${q}`, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          'Accept-Language': 'en-US,en;q=0.9',
-          'Accept': 'text/html'
-        }
-      });
-      const html = await ddgRes.text();
-      const matches = [...html.matchAll(/linkedin\.com\/company\/([a-zA-Z0-9\-_]+)/g)];
-      const skip = new Set(['login','signup','company','jobs','in','pub','search','about','help','legal','accessibility']);
-      const slugs = [...new Set(matches.map(m => m[1]))].filter(s => s.length > 2 && !skip.has(s.toLowerCase()));
-      if (slugs.length > 0) {
-        linkedinUrl = `https://www.linkedin.com/company/${slugs[0]}`;
-        confidence = domain ? 'high' : 'medium';
-      }
-    } catch (e) {}
-
-    // Step 3: If still no domain, try to find from DuckDuckGo website search
-    if (!domain) {
-      try {
-        const q = encodeURIComponent(`${company} official website UAE`);
-        const ddgRes = await fetch(`https://html.duckduckgo.com/html/?q=${q}`, {
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Accept': 'text/html'
-          }
-        });
-        const html = await ddgRes.text();
-        // Extract result URLs from DDG result links
-        const urlMatches = [...html.matchAll(/uddg=([^"&]+)/g)];
-        const skip = ['duckduckgo', 'google', 'linkedin', 'facebook', 'instagram', 'twitter', 'youtube', 'bayt', 'indeed', 'glassdoor', 'naukrigulf'];
-        for (const m of urlMatches) {
-          try {
-            const decoded = decodeURIComponent(m[1]);
-            const url = new URL(decoded);
-            const host = url.hostname.replace('www.', '');
-            if (!skip.some(s => host.includes(s))) {
-              domain = `https://${url.hostname}`;
-              confidence = linkedinUrl ? 'high' : 'medium';
-              break;
-            }
-          } catch {}
-        }
-      } catch (e) {}
+    // ── Step 2: Generate LinkedIn slug candidates ──────────────────────
+    function slugify(name) {
+      return name
+        .toLowerCase()
+        .replace(/\b(llc|fze|fzco|ltd|limited|inc|corp|est|uae|dubai|abu dhabi|sharjah|ajman|medical|centre|center|clinic|hospital|polyclinic|healthcare|health care|group|co)\b/gi, '')
+        .replace(/[^a-z0-9\s]/g, '')
+        .trim()
+        .replace(/\s+/g, '-')
+        .replace(/-+/g, '-')
+        .replace(/^-|-$/g, '');
     }
+
+    const base = slugify(company);
+    const words = base.split('-').filter(Boolean);
+
+    // Build candidates from most likely to least likely
+    const candidates = [];
+    if (base) candidates.push(base);
+    if (words.length > 1) candidates.push(words.join(''));               // no hyphens
+    if (words.length > 1) candidates.push(words[0] + '-' + words[1]);   // first two words
+    if (words[0]) candidates.push(words[0]);                             // first word only
+    if (domain) {
+      const domainSlug = domain.replace('https://', '').replace('http://', '').replace('www.', '').split('.')[0];
+      if (domainSlug && !candidates.includes(domainSlug)) candidates.push(domainSlug);
+    }
+    // Also try common patterns
+    const noSpaces = company.toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (!candidates.includes(noSpaces)) candidates.push(noSpaces);
+
+    // ── Step 3: Verify LinkedIn slugs in parallel ─────────────────────
+    let linkedinUrl = null;
+    const checks = candidates.slice(0, 6).map(async (slug) => {
+      if (!slug || slug.length < 2) return null;
+      try {
+        const r = await fetch(`https://www.linkedin.com/company/${slug}`, {
+          method: 'HEAD',
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+            'Accept-Language': 'en-US,en;q=0.9'
+          },
+          redirect: 'follow'
+        });
+        // 200 or redirected to same company = valid
+        if (r.status === 200) return `https://www.linkedin.com/company/${slug}`;
+        // Check final URL after redirects
+        if (r.url && r.url.includes('/company/') && !r.url.includes('/login') && !r.url.includes('/authwall')) {
+          const finalSlug = r.url.split('/company/')[1]?.split('/')[0]?.split('?')[0];
+          if (finalSlug && finalSlug.length > 2) return `https://www.linkedin.com/company/${finalSlug}`;
+        }
+        return null;
+      } catch { return null; }
+    });
+
+    const results = await Promise.all(checks);
+    linkedinUrl = results.find(r => r !== null) || null;
+
+    // ── Step 4: Build response ────────────────────────────────────────
+    const confidence = (domain && linkedinUrl) ? 'high' : (domain || linkedinUrl) ? 'medium' : 'low';
 
     return res.status(200).json({
       success: true,
@@ -86,7 +90,7 @@ export default async function handler(req, res) {
       domain,
       confidence,
       search_linkedin: `https://www.linkedin.com/search/results/companies/?keywords=${encodeURIComponent(company)}`,
-      search_google: `https://www.google.com/search?q=${encodeURIComponent(company + ' linkedin company page UAE')}`
+      search_google: `https://www.google.com/search?q=${encodeURIComponent(company + ' linkedin company page')}`
     });
 
   } catch (err) {
