@@ -1,0 +1,7 @@
+{
+  "version": 2,
+  "rewrites": [
+    { "source": "/api/enrich", "destination": "/api/enrich.js" },
+    { "source": "/(.*)", "destination": "/public/index.html" }
+  ]
+}
