@@ -56,6 +56,11 @@ h1 em{font-style:normal;background:linear-gradient(135deg,#f59e0b,#ea580c);-webk
 .bulk-btn:hover{opacity:0.88;}
 .bulk-btn:disabled{opacity:0.5;cursor:not-allowed;}
 .bulk-count{font-size:11px;color:var(--muted);margin-top:8px;text-align:right;}
+.upload-btn{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;padding:11px;background:transparent;border:1px dashed var(--border);border-radius:10px;color:var(--muted);font-family:'DM Mono',monospace;font-size:13px;cursor:pointer;transition:all 0.2s;margin-bottom:10px;}
+.upload-btn:hover{border-color:var(--accent);color:var(--accent);}
+.upload-btn.dragover{border-color:var(--accent);color:var(--accent);background:rgba(245,158,11,0.06);}
+#csvFileInput{display:none;}
+.col-select{width:100%;background:#0d0d15;border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'DM Mono',monospace;font-size:12px;padding:8px 12px;outline:none;margin-bottom:10px;display:none;}
 
 /* Status */
 .status{font-size:12px;color:var(--muted);margin-bottom:24px;display:flex;align-items:center;gap:8px;min-height:20px;}
@@ -135,6 +140,17 @@ h1 em{font-style:normal;background:linear-gradient(135deg,#f59e0b,#ea580c);-webk
 
 <!-- Bulk mode -->
 <div class="bulk-wrap" id="bulk-wrap">
+  <input type="file" id="csvFileInput" accept=".csv" onchange="handleCSVUpload(event)"/>
+  <label class="upload-btn" for="csvFileInput" id="uploadLabel"
+    ondragover="this.classList.add('dragover');event.preventDefault()"
+    ondragleave="this.classList.remove('dragover')"
+    ondrop="handleCSVDrop(event)">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+    Upload CSV — drag & drop or click
+  </label>
+  <select id="colSelect" class="col-select" onchange="applyCSVColumn()">
+    <option value="">— select company name column —</option>
+  </select>
   <textarea id="bulkInput" placeholder="Paste company names — one per line:
 Aster Clinic
 NMC Healthcare
@@ -288,6 +304,86 @@ function copyVal(btn, val) {
     btn.classList.add('copied');
     setTimeout(() => { btn.textContent = 'copy'; btn.classList.remove('copied'); }, 1500);
   });
+}
+
+function handleCSVDrop(e) {
+  e.preventDefault();
+  document.getElementById('uploadLabel').classList.remove('dragover');
+  const file = e.dataTransfer.files[0];
+  if (file && file.name.endsWith('.csv')) parseCSVFile(file);
+}
+
+function handleCSVUpload(e) {
+  const file = e.target.files[0];
+  if (file) parseCSVFile(file);
+}
+
+let csvRows = [];
+let csvHeaders = [];
+
+function parseCSVFile(file) {
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const text = e.target.result;
+    const lines = text.split(/?
+/).filter(l => l.trim());
+    if (!lines.length) return;
+
+    // Parse CSV properly (handle quoted fields)
+    function parseCSVLine(line) {
+      const result = [];
+      let current = '';
+      let inQuotes = false;
+      for (let i = 0; i < line.length; i++) {
+        if (line[i] === '"') { inQuotes = !inQuotes; continue; }
+        if (line[i] === ',' && !inQuotes) { result.push(current.trim()); current = ''; continue; }
+        current += line[i];
+      }
+      result.push(current.trim());
+      return result;
+    }
+
+    csvHeaders = parseCSVLine(lines[0]);
+    csvRows = lines.slice(1).map(l => parseCSVLine(l));
+
+    // Populate column selector
+    const sel = document.getElementById('colSelect');
+    sel.innerHTML = '<option value="">— select company name column —</option>';
+    csvHeaders.forEach((h, i) => {
+      const opt = document.createElement('option');
+      opt.value = i;
+      opt.textContent = h || `Column ${i+1}`;
+      // Auto-select if column name looks like company
+      if (/company|name|org|business/i.test(h)) opt.selected = true;
+      sel.appendChild(opt);
+    });
+    sel.style.display = 'block';
+
+    // Auto-apply if we found a good column
+    const autoIdx = csvHeaders.findIndex(h => /company|name|org|business/i.test(h));
+    if (autoIdx >= 0) {
+      sel.value = autoIdx;
+      applyCSVColumn();
+    }
+
+    // Update upload label
+    document.getElementById('uploadLabel').innerHTML = `
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+      ${file.name} · ${csvRows.length} rows loaded
+    `;
+    document.getElementById('uploadLabel').style.color = 'var(--green)';
+    document.getElementById('uploadLabel').style.borderColor = 'rgba(16,185,129,0.4)';
+  };
+  reader.readAsText(file);
+}
+
+function applyCSVColumn() {
+  const idx = parseInt(document.getElementById('colSelect').value);
+  if (isNaN(idx)) return;
+  const names = csvRows.map(r => r[idx]).filter(v => v && v.trim());
+  document.getElementById('bulkInput').value = names.join('
+');
+  updateBulkCount();
 }
 
 function exportCSV() {
