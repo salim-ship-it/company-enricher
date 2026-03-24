@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Company Enricher — VectorLabs</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,400;0,500;1,400&family=Syne:wght@700;800&display=swap" rel="stylesheet"/>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+:root{
+  --bg:#08080f;
+  --surface:#101018;
+  --card:#141420;
+  --border:#1c1c2e;
+  --accent:#f59e0b;
+  --accent2:#ea580c;
+  --text:#e2e2f0;
+  --muted:#5a5a72;
+  --green:#10b981;
+  --blue:#3b82f6;
+}
+body{background:var(--bg);color:var(--text);font-family:'DM Mono',monospace;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding:60px 20px 40px;}
+
+/* Logo */
+.logo{display:flex;align-items:center;gap:10px;margin-bottom:48px;}
+.logo svg{width:32px;height:32px;}
+.logo-text{font-family:'Syne',sans-serif;font-weight:800;font-size:16px;background:linear-gradient(135deg,#f59e0b,#ea580c);-webkit-background-clip:text;-webkit-text-fill-color:transparent;}
+
+/* Hero */
+.hero{text-align:center;margin-bottom:48px;}
+h1{font-family:'Syne',sans-serif;font-weight:800;font-size:clamp(32px,5vw,52px);line-height:1.05;margin-bottom:12px;}
+h1 em{font-style:normal;background:linear-gradient(135deg,#f59e0b,#ea580c);-webkit-background-clip:text;-webkit-text-fill-color:transparent;}
+.hero p{font-size:14px;color:var(--muted);letter-spacing:0.03em;}
+
+/* Search box */
+.search-wrap{width:100%;max-width:560px;margin-bottom:32px;}
+.search-box{display:flex;gap:0;background:var(--surface);border:1px solid var(--border);border-radius:14px;overflow:hidden;transition:border-color 0.2s;}
+.search-box:focus-within{border-color:rgba(245,158,11,0.4);}
+.search-box input{flex:1;background:transparent;border:none;color:var(--text);font-family:'DM Mono',monospace;font-size:15px;padding:16px 20px;outline:none;}
+.search-box input::placeholder{color:var(--muted);}
+.search-box button{background:linear-gradient(135deg,#f59e0b,#ea580c);border:none;color:#fff;font-family:'Syne',sans-serif;font-weight:700;font-size:14px;padding:0 24px;cursor:pointer;transition:opacity 0.2s;white-space:nowrap;}
+.search-box button:hover{opacity:0.88;}
+.search-box button:disabled{opacity:0.5;cursor:not-allowed;}
+
+/* Bulk mode toggle */
+.mode-toggle{display:flex;gap:8px;margin-bottom:24px;justify-content:center;}
+.mode-btn{font-size:11px;padding:6px 16px;border-radius:20px;border:1px solid var(--border);background:transparent;color:var(--muted);cursor:pointer;font-family:'DM Mono',monospace;transition:all 0.15s;}
+.mode-btn.active{border-color:var(--accent);color:var(--accent);background:rgba(245,158,11,0.08);}
+
+/* Bulk textarea */
+.bulk-wrap{width:100%;max-width:560px;margin-bottom:24px;display:none;}
+.bulk-wrap textarea{width:100%;background:var(--surface);border:1px solid var(--border);border-radius:14px;color:var(--text);font-family:'DM Mono',monospace;font-size:13px;padding:16px 20px;outline:none;resize:vertical;min-height:120px;line-height:1.7;transition:border-color 0.2s;}
+.bulk-wrap textarea:focus{border-color:rgba(245,158,11,0.4);}
+.bulk-wrap textarea::placeholder{color:var(--muted);}
+.bulk-btn{width:100%;margin-top:10px;padding:14px;background:linear-gradient(135deg,#f59e0b,#ea580c);border:none;border-radius:10px;color:#fff;font-family:'Syne',sans-serif;font-weight:700;font-size:15px;cursor:pointer;transition:opacity 0.2s;}
+.bulk-btn:hover{opacity:0.88;}
+.bulk-btn:disabled{opacity:0.5;cursor:not-allowed;}
+.bulk-count{font-size:11px;color:var(--muted);margin-top:8px;text-align:right;}
+
+/* Status */
+.status{font-size:12px;color:var(--muted);margin-bottom:24px;display:flex;align-items:center;gap:8px;min-height:20px;}
+.dot{width:6px;height:6px;border-radius:50%;background:var(--accent);animation:pulse 1s ease-in-out infinite;}
+@keyframes pulse{0%,100%{opacity:0.2;}50%{opacity:1;}}
+
+/* Results */
+.results{width:100%;max-width:560px;display:flex;flex-direction:column;gap:12px;}
+
+/* Result card */
+.result-card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:20px 22px;animation:fadeIn 0.3s ease;}
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:translateY(0);}}
+.result-company{font-family:'Syne',sans-serif;font-weight:700;font-size:15px;color:var(--text);margin-bottom:14px;display:flex;align-items:center;gap:8px;}
+.confidence-badge{font-size:10px;padding:2px 8px;border-radius:10px;font-family:'DM Mono',monospace;font-weight:500;}
+.confidence-badge.high{background:rgba(16,185,129,0.12);color:var(--green);border:1px solid rgba(16,185,129,0.2);}
+.confidence-badge.medium{background:rgba(245,158,11,0.12);color:var(--accent);border:1px solid rgba(245,158,11,0.2);}
+.confidence-badge.low{background:rgba(239,68,68,0.12);color:#ef4444;border:1px solid rgba(239,68,68,0.2);}
+
+.result-row{display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border);}
+.result-row:last-child{border-bottom:none;padding-bottom:0;}
+.result-label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.08em;width:100px;flex-shrink:0;}
+.result-val{font-size:13px;color:var(--text);flex:1;word-break:break-all;}
+.result-val a{color:var(--blue);text-decoration:none;}
+.result-val a:hover{text-decoration:underline;}
+.result-val.null-val{color:var(--muted);font-style:italic;}
+.copy-cell{display:flex;align-items:center;gap:6px;}
+.copy-btn-sm{background:transparent;border:1px solid var(--border);border-radius:6px;color:var(--muted);cursor:pointer;padding:3px 8px;font-size:10px;font-family:'DM Mono',monospace;transition:all 0.15s;flex-shrink:0;}
+.copy-btn-sm:hover{border-color:var(--accent);color:var(--accent);}
+.copy-btn-sm.copied{border-color:var(--green);color:var(--green);}
+
+/* Error card */
+.error-card{background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.2);border-radius:14px;padding:16px 20px;font-size:13px;color:#ef4444;}
+
+/* Export */
+.export-bar{width:100%;max-width:560px;margin-top:16px;display:none;justify-content:flex-end;}
+.export-btn{font-size:12px;padding:8px 18px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--muted);cursor:pointer;font-family:'DM Mono',monospace;transition:all 0.15s;}
+.export-btn:hover{border-color:var(--accent);color:var(--accent);}
+
+/* Progress bar */
+.progress-wrap{width:100%;max-width:560px;margin-bottom:16px;display:none;}
+.progress-bar{height:3px;background:var(--border);border-radius:2px;overflow:hidden;}
+.progress-fill{height:100%;background:linear-gradient(90deg,#f59e0b,#ea580c);border-radius:2px;transition:width 0.3s ease;}
+.progress-text{font-size:11px;color:var(--muted);margin-top:6px;text-align:center;}
+</style>
+</head>
+<body>
+
+<div class="logo">
+  <svg viewBox="0 0 120 120">
+    <defs>
+      <linearGradient id="g1" x1="0%" y1="0%" x2="50%" y2="100%"><stop offset="0%" stop-color="#f59e0b"/><stop offset="100%" stop-color="#ea580c"/></linearGradient>
+      <linearGradient id="g2" x1="50%" y1="100%" x2="100%" y2="0%"><stop offset="0%" stop-color="#f97316"/><stop offset="100%" stop-color="#fbbf24"/></linearGradient>
+    </defs>
+    <polygon points="20,38 40,26 68,88 50,88" fill="url(#g1)"/>
+    <polygon points="50,88 68,88 106,14 88,14" fill="url(#g2)"/>
+  </svg>
+  <span class="logo-text">VectorLabs</span>
+</div>
+
+<div class="hero">
+  <h1>Company <em>Enricher</em></h1>
+  <p>// enter a company name → get LinkedIn URL + domain instantly</p>
+</div>
+
+<div class="mode-toggle">
+  <button class="mode-btn active" onclick="setMode('single')">Single</button>
+  <button class="mode-btn" onclick="setMode('bulk')">Bulk</button>
+</div>
+
+<!-- Single mode -->
+<div class="search-wrap" id="single-wrap">
+  <div class="search-box">
+    <input type="text" id="companyInput" placeholder="e.g. Aster Clinic, NMC Healthcare..." onkeydown="if(event.key==='Enter')enrich()"/>
+    <button id="searchBtn" onclick="enrich()">Enrich →</button>
+  </div>
+</div>
+
+<!-- Bulk mode -->
+<div class="bulk-wrap" id="bulk-wrap">
+  <textarea id="bulkInput" placeholder="Paste company names — one per line:
+Aster Clinic
+NMC Healthcare
+Mediclinic
+Magnum Clinic FZE" oninput="updateBulkCount()"></textarea>
+  <div class="bulk-count"><span id="bulkCount">0</span> companies</div>
+  <button class="bulk-btn" id="bulkBtn" onclick="enrichBulk()">Enrich All →</button>
+</div>
+
+<div class="progress-wrap" id="progressWrap">
+  <div class="progress-bar"><div class="progress-fill" id="progressFill" style="width:0%"></div></div>
+  <div class="progress-text" id="progressText">Processing...</div>
+</div>
+
+<div class="status" id="status"></div>
+
+<div class="results" id="results"></div>
+
+<div class="export-bar" id="exportBar">
+  <button class="export-btn" onclick="exportCSV()">Export CSV</button>
+</div>
+
+<script>
+let mode = 'single';
+let allResults = [];
+
+function setMode(m) {
+  mode = m;
+  document.querySelectorAll('.mode-btn').forEach((b,i) => b.classList.toggle('active', (i===0&&m==='single')||(i===1&&m==='bulk')));
+  document.getElementById('single-wrap').style.display = m === 'single' ? 'block' : 'none';
+  document.getElementById('bulk-wrap').style.display = m === 'bulk' ? 'block' : 'none';
+}
+
+function updateBulkCount() {
+  const lines = document.getElementById('bulkInput').value.split('\n').filter(l => l.trim());
+  document.getElementById('bulkCount').textContent = lines.length;
+}
+
+function setStatus(msg, loading = false) {
+  const el = document.getElementById('status');
+  if (!msg) { el.innerHTML = ''; return; }
+  el.innerHTML = loading ? `<div class="dot"></div>${msg}` : msg;
+}
+
+async function callAPI(company) {
+  const res = await fetch('/api/enrich', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ company })
+  });
+  return await res.json();
+}
+
+function renderCard(data) {
+  const linkedinVal = data.linkedin_url
+    ? `<div class="copy-cell"><a href="${data.linkedin_url}" target="_blank">${data.linkedin_url}</a><button class="copy-btn-sm" onclick="copyVal(this,'${data.linkedin_url}')">copy</button></div>`
+    : `<span class="null-val">not found</span>`;
+
+  const domainVal = data.domain
+    ? `<div class="copy-cell"><a href="${data.domain}" target="_blank">${data.domain}</a><button class="copy-btn-sm" onclick="copyVal(this,'${data.domain}')">copy</button></div>`
+    : `<span class="null-val">not found</span>`;
+
+  const conf = data.confidence || 'medium';
+
+  return `
+    <div class="result-card">
+      <div class="result-company">
+        ${data.company_name || 'Unknown'}
+        <span class="confidence-badge ${conf}">${conf}</span>
+      </div>
+      <div class="result-row">
+        <span class="result-label">LinkedIn</span>
+        <span class="result-val">${linkedinVal}</span>
+      </div>
+      <div class="result-row">
+        <span class="result-label">Domain</span>
+        <span class="result-val">${domainVal}</span>
+      </div>
+    </div>`;
+}
+
+async function enrich() {
+  const company = document.getElementById('companyInput').value.trim();
+  if (!company) return;
+
+  const btn = document.getElementById('searchBtn');
+  btn.disabled = true;
+  btn.textContent = '...';
+  setStatus(`Looking up ${company}...`, true);
+  document.getElementById('results').innerHTML = '';
+  document.getElementById('exportBar').style.display = 'none';
+  allResults = [];
+
+  try {
+    const data = await callAPI(company);
+    allResults = [data];
+    document.getElementById('results').innerHTML = data.error
+      ? `<div class="error-card">Error: ${data.error}</div>`
+      : renderCard(data);
+    document.getElementById('exportBar').style.display = 'flex';
+    setStatus('');
+  } catch(e) {
+    document.getElementById('results').innerHTML = `<div class="error-card">${e.message}</div>`;
+    setStatus('');
+  }
+
+  btn.disabled = false;
+  btn.textContent = 'Enrich →';
+}
+
+async function enrichBulk() {
+  const lines = document.getElementById('bulkInput').value.split('\n').filter(l => l.trim());
+  if (!lines.length) return;
+
+  const btn = document.getElementById('bulkBtn');
+  btn.disabled = true;
+  document.getElementById('results').innerHTML = '';
+  document.getElementById('exportBar').style.display = 'none';
+  document.getElementById('progressWrap').style.display = 'block';
+  allResults = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const company = lines[i].trim();
+    const pct = Math.round(((i) / lines.length) * 100);
+    document.getElementById('progressFill').style.width = pct + '%';
+    document.getElementById('progressText').textContent = `${i + 1} / ${lines.length} — ${company}`;
+    setStatus(`Enriching ${company}...`, true);
+
+    try {
+      const data = await callAPI(company);
+      allResults.push(data);
+      document.getElementById('results').insertAdjacentHTML('beforeend', renderCard(data));
+    } catch(e) {
+      document.getElementById('results').insertAdjacentHTML('beforeend', `<div class="error-card">${company}: ${e.message}</div>`);
+    }
+
+    // Small delay to avoid rate limiting
+    if (i < lines.length - 1) await new Promise(r => setTimeout(r, 800));
+  }
+
+  document.getElementById('progressFill').style.width = '100%';
+  document.getElementById('progressText').textContent = `Done! ${lines.length} companies enriched.`;
+  document.getElementById('exportBar').style.display = 'flex';
+  setStatus('');
+  btn.disabled = false;
+}
+
+function copyVal(btn, val) {
+  navigator.clipboard.writeText(val).then(() => {
+    btn.textContent = 'copied!';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = 'copy'; btn.classList.remove('copied'); }, 1500);
+  });
+}
+
+function exportCSV() {
+  if (!allResults.length) return;
+  const rows = [['Company Name', 'LinkedIn URL', 'Domain', 'Confidence']];
+  allResults.forEach(r => {
+    rows.push([
+      `"${(r.company_name || '').replace(/"/g, '""')}"`,
+      `"${(r.linkedin_url || '').replace(/"/g, '""')}"`,
+      `"${(r.domain || '').replace(/"/g, '""')}"`,
+      r.confidence || ''
+    ]);
+  });
+  const csv = rows.map(r => r.join(',')).join('\n');
+  const a = document.createElement('a');
+  a.href = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv);
+  a.download = 'enriched_companies.csv';
+  a.click();
+}
+</script>
+</body>
+</html>
