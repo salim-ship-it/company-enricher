@@ -9,9 +9,11 @@ export default async function handler(req, res) {
     const { company } = req.body;
     if (!company) return res.status(400).json({ error: 'Company name required' });
 
-    // ── Step 1: Clearbit → domain ──────────────────────────────────────
     let domain = null;
+    let linkedinUrl = null;
     let companyName = company;
+
+    // ── Step 1: Clearbit for domain ──────────────────────────────────
     try {
       const cb = await fetch(
         `https://autocomplete.clearbit.com/v1/companies/suggest?query=${encodeURIComponent(company)}`,
@@ -24,63 +26,126 @@ export default async function handler(req, res) {
       }
     } catch {}
 
-    // ── Step 2: Generate LinkedIn slug candidates ──────────────────────
-    function slugify(name) {
-      return name
-        .toLowerCase()
-        .replace(/\b(llc|fze|fzco|ltd|limited|inc|corp|est|uae|dubai|abu dhabi|sharjah|ajman|medical|centre|center|clinic|hospital|polyclinic|healthcare|health care|group|co)\b/gi, '')
-        .replace(/[^a-z0-9\s]/g, '')
-        .trim()
-        .replace(/\s+/g, '-')
-        .replace(/-+/g, '-')
-        .replace(/^-|-$/g, '');
-    }
+    // ── Step 2: Use Claude with web_search to find LinkedIn ──────────
+    try {
+      const messages = [{
+        role: 'user',
+        content: `Search for the LinkedIn company page for "${company}". 
+This is likely a clinic or medical center in Saudi Arabia or UAE.
+Search: "${company} linkedin company"
+Also try: "${company} Saudi Arabia linkedin"
 
-    const base = slugify(company);
-    const words = base.split('-').filter(Boolean);
+After searching, return ONLY this JSON (no markdown):
+{"linkedin_url": "https://www.linkedin.com/company/...", "domain": "https://...", "company_name": "${company}", "confidence": "high|medium|low"}
 
-    // Build candidates from most likely to least likely
-    const candidates = [];
-    if (base) candidates.push(base);
-    if (words.length > 1) candidates.push(words.join(''));               // no hyphens
-    if (words.length > 1) candidates.push(words[0] + '-' + words[1]);   // first two words
-    if (words[0]) candidates.push(words[0]);                             // first word only
-    if (domain) {
-      const domainSlug = domain.replace('https://', '').replace('http://', '').replace('www.', '').split('.')[0];
-      if (domainSlug && !candidates.includes(domainSlug)) candidates.push(domainSlug);
-    }
-    // Also try common patterns
-    const noSpaces = company.toLowerCase().replace(/[^a-z0-9]/g, '');
-    if (!candidates.includes(noSpaces)) candidates.push(noSpaces);
+Use null for fields you cannot find. Only return verified URLs you actually found in search results.`
+      }];
 
-    // ── Step 3: Verify LinkedIn slugs in parallel ─────────────────────
-    let linkedinUrl = null;
-    const checks = candidates.slice(0, 6).map(async (slug) => {
-      if (!slug || slug.length < 2) return null;
-      try {
-        const r = await fetch(`https://www.linkedin.com/company/${slug}`, {
-          method: 'HEAD',
+      let finalText = '';
+      let iterations = 0;
+
+      while (iterations < 6) {
+        iterations++;
+        const response = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
           headers: {
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-            'Accept-Language': 'en-US,en;q=0.9'
+            'Content-Type': 'application/json',
+            'anthropic-dangerous-direct-browser-access': 'true',
           },
-          redirect: 'follow'
+          body: JSON.stringify({
+            model: 'claude-sonnet-4-5',
+            max_tokens: 500,
+            tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+            messages
+          })
         });
-        // 200 or redirected to same company = valid
-        if (r.status === 200) return `https://www.linkedin.com/company/${slug}`;
-        // Check final URL after redirects
-        if (r.url && r.url.includes('/company/') && !r.url.includes('/login') && !r.url.includes('/authwall')) {
-          const finalSlug = r.url.split('/company/')[1]?.split('/')[0]?.split('?')[0];
-          if (finalSlug && finalSlug.length > 2) return `https://www.linkedin.com/company/${finalSlug}`;
+
+        const data = await response.json();
+        const content = data.content || [];
+        messages.push({ role: 'assistant', content });
+
+        if (data.stop_reason === 'end_turn') {
+          for (const block of content) {
+            if (block.type === 'text') finalText = block.text;
+          }
+          break;
         }
-        return null;
-      } catch { return null; }
-    });
 
-    const results = await Promise.all(checks);
-    linkedinUrl = results.find(r => r !== null) || null;
+        if (data.stop_reason === 'tool_use') {
+          const toolResults = content
+            .filter(b => b.type === 'tool_use')
+            .map(b => ({
+              type: 'tool_result',
+              tool_use_id: b.id,
+              content: `Search executed for: ${b.input?.query || company}`
+            }));
+          messages.push({ role: 'user', content: toolResults });
+          continue;
+        }
+        break;
+      }
 
-    // ── Step 4: Build response ────────────────────────────────────────
+      // Parse result from Claude
+      if (finalText) {
+        try {
+          const match = finalText.match(/\{[\s\S]*?\}/);
+          if (match) {
+            const parsed = JSON.parse(match[0]);
+            if (parsed.linkedin_url && parsed.linkedin_url.includes('linkedin.com/company/')) {
+              linkedinUrl = parsed.linkedin_url;
+            }
+            if (parsed.domain && !domain) {
+              domain = parsed.domain;
+            }
+            if (parsed.company_name) companyName = parsed.company_name;
+          }
+        } catch {}
+      }
+    } catch {}
+
+    // ── Step 3: Slug verification fallback ───────────────────────────
+    if (!linkedinUrl) {
+      function slugify(name) {
+        return name
+          .toLowerCase()
+          .replace(/\b(llc|fze|fzco|ltd|limited|inc|corp|est|uae|dubai|saudi|arabia|ksa|medical|centre|center|clinic|hospital|polyclinic|healthcare|group|co|general|complex|specialized|dental|care)\b/gi, '')
+          .replace(/[^a-z0-9\s]/g, '')
+          .trim()
+          .replace(/\s+/g, '-')
+          .replace(/-+/g, '-')
+          .replace(/^-|-$/g, '');
+      }
+
+      const base = slugify(company);
+      const words = base.split('-').filter(Boolean);
+      const candidates = [...new Set([
+        base,
+        words.join(''),
+        words.slice(0, 2).join('-'),
+        words[0],
+        words.slice(0, 3).join('-'),
+      ].filter(s => s && s.length > 2))].slice(0, 5);
+
+      const checks = candidates.map(async (slug) => {
+        try {
+          const r = await fetch(`https://www.linkedin.com/company/${slug}`, {
+            method: 'HEAD',
+            headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' },
+            redirect: 'follow'
+          });
+          if (r.status === 200) return `https://www.linkedin.com/company/${slug}`;
+          if (r.url?.includes('/company/') && !r.url?.includes('/login') && !r.url?.includes('/authwall')) {
+            const finalSlug = r.url.split('/company/')[1]?.split('/')[0]?.split('?')[0];
+            if (finalSlug?.length > 2) return `https://www.linkedin.com/company/${finalSlug}`;
+          }
+          return null;
+        } catch { return null; }
+      });
+
+      const results = await Promise.all(checks);
+      linkedinUrl = results.find(r => r !== null) || null;
+    }
+
     const confidence = (domain && linkedinUrl) ? 'high' : (domain || linkedinUrl) ? 'medium' : 'low';
 
     return res.status(200).json({
